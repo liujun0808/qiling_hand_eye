@@ -8,15 +8,15 @@
 
 ```mermaid
 flowchart LR
-    SDK[SDK /lowstate] --> TC[topic_convertor]
-    TC --> STATE[/human_lower_state]
-    STATE --> FK[Pinocchio FK]
-    CAM[RealSense RGB + CameraInfo] --> TAG[AprilTag Pose]
-    FK --> REC[交互采样]
+    SDK["SDK: /lowstate"] --> TC["topic_convertor"]
+    TC --> STATE["/human_lower_state"]
+    STATE --> FK["Pinocchio FK"]
+    CAM["RealSense RGB and CameraInfo"] --> TAG["AprilTag Pose"]
+    FK --> REC["交互采样"]
     TAG --> REC
-    REC --> YAML[samples.yaml + images]
-    YAML --> SOLVE[SE(3) 外参求解]
-    SOLVE --> RESULT[外参 YAML / TF / URDF]
+    REC --> YAML["samples.yaml and images"]
+    YAML --> SOLVE["SE(3) 外参求解"]
+    SOLVE --> RESULT["外参 YAML、TF 和 URDF"]
 ```
 
 采样过程：按住手柄按键拖动手臂，松开后进入 HOLD；确认 Tag 可见后按 `c` 采集，按 `n` 接受或 `r` 丢弃。默认采集 17 组，每次自动生成时间戳目录。
