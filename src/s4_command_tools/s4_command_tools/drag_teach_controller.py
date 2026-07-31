@@ -9,6 +9,7 @@ import yaml
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from mit_msgs.msg import MITJointCommand, MITJointCommands, MITLowState
 from rclpy.node import Node
+from sensor_msgs.msg import Joy
 
 from s4_handeye_calibration.s4_model import ARM_JOINT_NAMES, S4Kinematics
 
@@ -37,18 +38,12 @@ def _value(config: Dict[str, object], key: str, fallback: float) -> float:
     return float(config.get(key, fallback))
 
 
-def _bool_value(config: Dict[str, object], key: str, fallback: bool) -> bool:
-    value = config.get(key, fallback)
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    return bool(value)
-
-
 class DragTeachController(Node):
     """Low-stiffness 50 Hz drag-teach command generator for the 26-motor MIT bridge."""
 
     ARM_START_INDEX = 12
     ARM_COUNT = 14
+    JOINTS_PER_ARM = 7
 
     def __init__(self) -> None:
         super().__init__("s4_drag_teach_controller")
@@ -70,14 +65,14 @@ class DragTeachController(Node):
         self.declare_parameter("activation_hold_time_sec", 1.0)
         self.declare_parameter("safety_hold_error_limit_rad", 0.25)
         self.declare_parameter("teach_mode", "drag_hold")
+        self.declare_parameter("joy_topic", "/joy")
+        self.declare_parameter("left_drag_button_index", 0)
+        self.declare_parameter("right_drag_button_index", 1)
+        self.declare_parameter("joy_timeout_sec", 0.25)
         self.declare_parameter("arm_kp", 0.0)
         self.declare_parameter("arm_kd", 0.35)
         self.declare_parameter("hold_arm_kp", 5.0)
         self.declare_parameter("hold_arm_kd", 0.6)
-        self.declare_parameter("still_velocity_threshold_rad_s", 0.03)
-        self.declare_parameter("move_velocity_threshold_rad_s", 0.08)
-        self.declare_parameter("hold_position_error_threshold_rad", 0.04)
-        self.declare_parameter("still_time_sec", 0.4)
         self.declare_parameter("arm_effort_limit", 8.0)
         self.declare_parameter("leg_hold_kp", 10.0)
         self.declare_parameter("leg_hold_kd", 0.3)
@@ -102,20 +97,16 @@ class DragTeachController(Node):
             self.get_parameter("safety_hold_error_limit_rad").value
         )
         self._teach_mode = self.get_parameter("teach_mode").value
+        self._joy_topic = self.get_parameter("joy_topic").value
+        self._drag_button_indices = [
+            int(self.get_parameter("left_drag_button_index").value),
+            int(self.get_parameter("right_drag_button_index").value),
+        ]
+        self._joy_timeout_sec = float(self.get_parameter("joy_timeout_sec").value)
         self._arm_kp = float(self.get_parameter("arm_kp").value)
         self._arm_kd = float(self.get_parameter("arm_kd").value)
         self._hold_arm_kp = float(self.get_parameter("hold_arm_kp").value)
         self._hold_arm_kd = float(self.get_parameter("hold_arm_kd").value)
-        self._still_velocity_threshold = float(
-            self.get_parameter("still_velocity_threshold_rad_s").value
-        )
-        self._move_velocity_threshold = float(
-            self.get_parameter("move_velocity_threshold_rad_s").value
-        )
-        self._hold_position_error_threshold = float(
-            self.get_parameter("hold_position_error_threshold_rad").value
-        )
-        self._still_time_sec = float(self.get_parameter("still_time_sec").value)
         self._arm_effort_limit = float(self.get_parameter("arm_effort_limit").value)
         self._leg_hold_kp = float(self.get_parameter("leg_hold_kp").value)
         self._leg_hold_kd = float(self.get_parameter("leg_hold_kd").value)
@@ -143,14 +134,12 @@ class DragTeachController(Node):
             raise ValueError("safety_hold_error_limit_rad must be non-negative")
         if self._teach_mode not in ("transparent", "drag_hold"):
             raise ValueError("teach_mode must be 'transparent' or 'drag_hold'")
-        if self._still_velocity_threshold < 0.0 or self._move_velocity_threshold < 0.0:
-            raise ValueError("velocity thresholds must be non-negative")
-        if self._hold_position_error_threshold < 0.0:
-            raise ValueError("hold_position_error_threshold_rad must be non-negative")
-        if self._move_velocity_threshold < self._still_velocity_threshold:
-            raise ValueError("move_velocity_threshold_rad_s must be >= still_velocity_threshold_rad_s")
-        if self._still_time_sec <= 0.0:
-            raise ValueError("still_time_sec must be positive")
+        if any(index < 0 for index in self._drag_button_indices):
+            raise ValueError("left/right_drag_button_index must be non-negative")
+        if self._drag_button_indices[0] == self._drag_button_indices[1]:
+            raise ValueError("left/right_drag_button_index must select different buttons")
+        if self._joy_timeout_sec <= 0.0:
+            raise ValueError("joy_timeout_sec must be positive")
 
         self._kinematics = S4Kinematics(self.get_parameter("urdf_path").value)
         self._load_joint_config()
@@ -163,7 +152,13 @@ class DragTeachController(Node):
         self._leg_hold_positions: Optional[List[float]] = None
         self._arm_hold_positions: Optional[List[float]] = None
         self._arm_states = ["DRAG"] * self.ARM_COUNT
-        self._arm_still_started_time_sec: List[Optional[float]] = [None] * self.ARM_COUNT
+        self._joy_received = False
+        self._joy_buttons_valid = False
+        self._drag_buttons_pressed = [False, False]
+        self._clutch_armed = [False, False]
+        self._clutch_active = [False, False]
+        self._last_joy_time_sec = 0.0
+        self._warned_joy_timeout = False
         self._last_control_enabled = False
         self._active_since_time_sec: Optional[float] = None
         self._faulted = False
@@ -176,6 +171,7 @@ class DragTeachController(Node):
         self._state_sub = self.create_subscription(
             MITLowState, self._state_topic, self._state_callback, 10
         )
+        self._joy_sub = self.create_subscription(Joy, self._joy_topic, self._joy_callback, 10)
         self._command_pub = self.create_publisher(MITJointCommands, self._command_topic, 10)
         self._timer = self.create_timer(1.0 / self._publish_rate_hz, self._timer_callback)
 
@@ -191,6 +187,9 @@ class DragTeachController(Node):
             "Drag-teach controller configured: "
             f"rate={self._publish_rate_hz} Hz, state_topic={self._state_topic}, "
             f"command_topic={self._command_topic}, teach_mode={self._teach_mode}, "
+            f"joy_topic={self._joy_topic}, "
+            f"left_drag_button_index={self._drag_button_indices[0]}, "
+            f"right_drag_button_index={self._drag_button_indices[1]}, "
             f"gravity_compensation={self._gravity_compensation}, "
             f"joint_config_path={self._joint_config_path or _default_joint_config_path()}"
         )
@@ -205,18 +204,9 @@ class DragTeachController(Node):
             "hold_kd": self._hold_arm_kd,
             "gravity_scale": 1.0,
             "effort_limit": self._arm_effort_limit,
-            "still_velocity_threshold_rad_s": self._still_velocity_threshold,
-            "move_velocity_threshold_rad_s": self._move_velocity_threshold,
-            "hold_position_error_threshold_rad": self._hold_position_error_threshold,
-            "still_time_sec": self._still_time_sec,
             "safety_hold_error_limit_rad": self._safety_hold_error_limit,
             "gravity_sign": 1.0,
-            "min_position_rad": -math.inf,
-            "max_position_rad": math.inf,
-            "position_limit_margin_rad": 0.08,
             "max_velocity_rad_s": 2.0,
-            "auto_drag_enabled": True,
-            "hold_position_enabled": True,
         }
         data: Dict[str, object] = {}
         if os.path.exists(path):
@@ -235,24 +225,17 @@ class DragTeachController(Node):
         self._joint_hold_kd: List[float] = []
         self._joint_gravity_scale: List[float] = []
         self._joint_effort_limit: List[float] = []
-        self._joint_still_velocity_threshold: List[float] = []
-        self._joint_move_velocity_threshold: List[float] = []
-        self._joint_hold_position_error_threshold: List[float] = []
-        self._joint_still_time_sec: List[float] = []
         self._joint_safety_hold_error_limit: List[float] = []
         self._joint_gravity_sign: List[float] = []
         self._joint_min_position: List[float] = []
         self._joint_max_position: List[float] = []
-        self._joint_position_limit_margin: List[float] = []
         self._joint_max_velocity: List[float] = []
-        self._joint_auto_drag_enabled: List[bool] = []
-        self._joint_hold_position_enabled: List[bool] = []
+        self._joint_release_prediction_time: List[float] = []
+        self._joint_release_prediction_limit: List[float] = []
 
         for joint_name in ARM_JOINT_NAMES:
             model_lower, model_upper = self._model_position_limits(joint_name)
             joint_defaults = dict(defaults)
-            joint_defaults["min_position_rad"] = model_lower
-            joint_defaults["max_position_rad"] = model_upper
 
             config = dict(joint_defaults)
             config.update(arm_defaults)
@@ -271,30 +254,6 @@ class DragTeachController(Node):
             self._joint_effort_limit.append(
                 _value(config, "effort_limit", joint_defaults["effort_limit"])
             )
-            self._joint_still_velocity_threshold.append(
-                _value(
-                    config,
-                    "still_velocity_threshold_rad_s",
-                    joint_defaults["still_velocity_threshold_rad_s"],
-                )
-            )
-            self._joint_move_velocity_threshold.append(
-                _value(
-                    config,
-                    "move_velocity_threshold_rad_s",
-                    joint_defaults["move_velocity_threshold_rad_s"],
-                )
-            )
-            self._joint_hold_position_error_threshold.append(
-                _value(
-                    config,
-                    "hold_position_error_threshold_rad",
-                    joint_defaults["hold_position_error_threshold_rad"],
-                )
-            )
-            self._joint_still_time_sec.append(
-                _value(config, "still_time_sec", joint_defaults["still_time_sec"])
-            )
             self._joint_safety_hold_error_limit.append(
                 _value(
                     config,
@@ -302,32 +261,19 @@ class DragTeachController(Node):
                     joint_defaults["safety_hold_error_limit_rad"],
                 )
             )
-            self._joint_min_position.append(
-                _value(config, "min_position_rad", joint_defaults["min_position_rad"])
-            )
-            self._joint_max_position.append(
-                _value(config, "max_position_rad", joint_defaults["max_position_rad"])
-            )
-            self._joint_position_limit_margin.append(
-                _value(
-                    config,
-                    "position_limit_margin_rad",
-                    joint_defaults["position_limit_margin_rad"],
-                )
-            )
+            self._joint_min_position.append(model_lower)
+            self._joint_max_position.append(model_upper)
             self._joint_max_velocity.append(
                 _value(config, "max_velocity_rad_s", joint_defaults["max_velocity_rad_s"])
             )
-            self._joint_auto_drag_enabled.append(
-                _bool_value(config, "auto_drag_enabled", joint_defaults["auto_drag_enabled"])
-            )
-            self._joint_hold_position_enabled.append(
-                _bool_value(
-                    config,
-                    "hold_position_enabled",
-                    joint_defaults["hold_position_enabled"],
+            prediction_time = _value(config, "release_prediction_time_sec", 0.0)
+            prediction_limit = _value(config, "release_prediction_limit_rad", 0.0)
+            if prediction_time < 0.0 or prediction_limit < 0.0:
+                raise ValueError(
+                    f"{joint_name} release prediction parameters must be non-negative"
                 )
-            )
+            self._joint_release_prediction_time.append(prediction_time)
+            self._joint_release_prediction_limit.append(prediction_limit)
 
     def _model_position_limits(self, joint_name: str) -> tuple[float, float]:
         joint_id = self._kinematics.model.getJointId(joint_name)
@@ -385,6 +331,25 @@ class DragTeachController(Node):
         self._last_state_time_sec = self.get_clock().now().nanoseconds * 1e-9
         self._state_ready = True
 
+    def _joy_callback(self, msg: Joy) -> None:
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self._joy_received = True
+        self._last_joy_time_sec = now
+        highest_button_index = max(self._drag_button_indices)
+        if highest_button_index >= len(msg.buttons):
+            self._joy_buttons_valid = False
+            self._drag_buttons_pressed = [False, False]
+            self.get_logger().error(
+                f"Joy message has {len(msg.buttons)} buttons; "
+                f"configured A/B indices {self._drag_button_indices} are invalid",
+                throttle_duration_sec=2.0,
+            )
+            return
+        self._joy_buttons_valid = True
+        self._drag_buttons_pressed = [
+            bool(msg.buttons[index]) for index in self._drag_button_indices
+        ]
+
     def _timer_callback(self) -> None:
         if not self._state_ready:
             if not self._warned_waiting:
@@ -425,13 +390,13 @@ class DragTeachController(Node):
             self.get_logger().error(f"Safety fault: {fault_reason}")
             self._publish_passive_fault_command()
             return
+        self._update_drag_hold_state(now)
         if self._hold_error_exceeds_safety_limit():
             self._faulted = True
             self._fault_reason = "Arm moved too far from latched hold pose"
             self.get_logger().error(self._fault_reason)
             self._publish_passive_fault_command()
             return
-        self._update_drag_hold_state(now)
         command = self._build_command()
         self._command_pub.publish(command)
 
@@ -440,16 +405,20 @@ class DragTeachController(Node):
             self._arm_hold_positions = self._arm_positions()
             self._leg_hold_positions = self._positions[: self.ARM_START_INDEX]
             self._arm_states = ["HOLD"] * self.ARM_COUNT
-            self._arm_still_started_time_sec = [None] * self.ARM_COUNT
+            self._clutch_armed = [False, False]
+            self._clutch_active = [False, False]
+            self._warned_joy_timeout = False
             self._active_since_time_sec = now
             self._faulted = False
             self._fault_reason = ""
             self.get_logger().warn(
-                "control_enabled=true: latched current arm pose, entering HOLD, "
-                "gravity feedforward will ramp from zero"
+                "control_enabled=true: latched current arm pose, entering HOLD. "
+                "Release Xbox A and B once to arm the independent drag clutches."
             )
         elif not control_enabled and self._last_control_enabled:
             self._active_since_time_sec = None
+            self._clutch_armed = [False, False]
+            self._clutch_active = [False, False]
             self._faulted = False
             self._fault_reason = ""
             self.get_logger().warn("control_enabled=false: command publication disabled")
@@ -470,16 +439,6 @@ class DragTeachController(Node):
         self._publish_passive_on_fault = bool(
             self.get_parameter("publish_passive_on_fault").value
         )
-        self._still_velocity_threshold = float(
-            self.get_parameter("still_velocity_threshold_rad_s").value
-        )
-        self._move_velocity_threshold = float(
-            self.get_parameter("move_velocity_threshold_rad_s").value
-        )
-        self._hold_position_error_threshold = float(
-            self.get_parameter("hold_position_error_threshold_rad").value
-        )
-        self._still_time_sec = float(self.get_parameter("still_time_sec").value)
 
     def _arm_positions(self) -> List[float]:
         return self._positions[self.ARM_START_INDEX : self.ARM_START_INDEX + self.ARM_COUNT]
@@ -505,8 +464,6 @@ class DragTeachController(Node):
         for index, (current, target) in enumerate(
             zip(self._arm_positions(), self._arm_hold_positions)
         ):
-            if not self._joint_hold_position_enabled[index]:
-                continue
             if self._arm_states[index] != "HOLD":
                 continue
             limit = self._joint_safety_hold_error_limit[index]
@@ -524,18 +481,15 @@ class DragTeachController(Node):
             joint_name = ARM_JOINT_NAMES[index]
             lower = self._joint_min_position[index]
             upper = self._joint_max_position[index]
-            margin = max(0.0, self._joint_position_limit_margin[index])
-            lower_safe = lower + margin if math.isfinite(lower) else lower
-            upper_safe = upper - margin if math.isfinite(upper) else upper
-            if math.isfinite(lower_safe) and position <= lower_safe:
+            if math.isfinite(lower) and position <= lower:
                 return (
-                    f"{joint_name} is near lower limit "
-                    f"({position:.3f} <= {lower_safe:.3f} rad)"
+                    f"{joint_name} reached URDF lower limit "
+                    f"({position:.3f} <= {lower:.3f} rad)"
                 )
-            if math.isfinite(upper_safe) and position >= upper_safe:
+            if math.isfinite(upper) and position >= upper:
                 return (
-                    f"{joint_name} is near upper limit "
-                    f"({position:.3f} >= {upper_safe:.3f} rad)"
+                    f"{joint_name} reached URDF upper limit "
+                    f"({position:.3f} >= {upper:.3f} rad)"
                 )
             max_velocity = self._joint_max_velocity[index]
             if max_velocity > 0.0 and abs(velocity) >= max_velocity:
@@ -549,50 +503,119 @@ class DragTeachController(Node):
         if self._teach_mode != "drag_hold":
             self._arm_states = ["DRAG"] * self.ARM_COUNT
             self._arm_hold_positions = self._arm_positions()
-            self._arm_still_started_time_sec = [None] * self.ARM_COUNT
             return
 
         if self._in_activation_hold(now):
             self._arm_states = ["HOLD"] * self.ARM_COUNT
             return
 
+        joy_fresh = (
+            self._joy_received
+            and self._joy_buttons_valid
+            and now - self._last_joy_time_sec <= self._joy_timeout_sec
+        )
         arm_positions = self._arm_positions()
         arm_velocities = self._arm_velocities()
-        if self._arm_hold_positions is None:
-            self._arm_hold_positions = arm_positions
 
-        for index, (position, velocity) in enumerate(zip(arm_positions, arm_velocities)):
-            speed = abs(velocity)
-            hold_error = abs(position - self._arm_hold_positions[index])
-
-            should_drag = self._joint_auto_drag_enabled[index] and (
-                speed >= self._joint_move_velocity_threshold[index]
-                or (
-                    self._arm_states[index] == "HOLD"
-                    and hold_error >= self._joint_hold_position_error_threshold[index]
+        if not joy_fresh:
+            if any(self._clutch_active):
+                self.get_logger().warn(
+                    "Joy input timed out or became invalid; active arm clutches entering HOLD"
                 )
-            )
-            if should_drag:
-                if self._arm_states[index] != "DRAG":
-                    self.get_logger().info(f"{ARM_JOINT_NAMES[index]} switching to DRAG")
-                self._arm_states[index] = "DRAG"
-                self._arm_hold_positions[index] = position
-                self._arm_still_started_time_sec[index] = None
-                continue
+            elif not self._warned_joy_timeout:
+                self.get_logger().warn(
+                    f"Waiting for valid Joy input on {self._joy_topic}; arms remain in HOLD"
+                )
+            self._warned_joy_timeout = True
+            clutch_requested = [False, False]
+        else:
+            self._warned_joy_timeout = False
+            for side, button_name in enumerate(("A", "B")):
+                if not self._drag_buttons_pressed[side] and not self._clutch_armed[side]:
+                    self._clutch_armed[side] = True
+                    arm_name = "left" if side == 0 else "right"
+                    self.get_logger().info(
+                        f"Xbox {button_name} released; {arm_name}-arm drag clutch armed"
+                    )
+            clutch_requested = [
+                self._clutch_armed[side] and self._drag_buttons_pressed[side]
+                for side in range(2)
+            ]
 
-            if speed <= self._joint_still_velocity_threshold[index]:
-                if self._arm_still_started_time_sec[index] is None:
-                    self._arm_still_started_time_sec[index] = now
-                still_duration = now - self._arm_still_started_time_sec[index]
-                if (
-                    self._arm_states[index] == "DRAG"
-                    and still_duration >= self._joint_still_time_sec[index]
-                ):
-                    self._arm_hold_positions[index] = position
-                    self._arm_states[index] = "HOLD"
-                    self.get_logger().info(f"{ARM_JOINT_NAMES[index]} switching to HOLD")
+        if self._arm_hold_positions is None:
+            self._arm_hold_positions = list(arm_positions)
+
+        for side, (button_name, arm_name) in enumerate(
+            (("A", "left"), ("B", "right"))
+        ):
+            start = side * self.JOINTS_PER_ARM
+            end = start + self.JOINTS_PER_ARM
+            if clutch_requested[side]:
+                if not self._clutch_active[side]:
+                    self.get_logger().warn(
+                        f"Xbox {button_name} pressed: {arm_name} arm entering DRAG"
+                    )
+                for index in range(start, end):
+                    self._arm_states[index] = "DRAG"
+                    self._arm_hold_positions[index] = arm_positions[index]
             else:
-                self._arm_still_started_time_sec[index] = None
+                if self._clutch_active[side]:
+                    reason = (
+                        f"Xbox {button_name} released"
+                        if joy_fresh
+                        else "Joy input unavailable"
+                    )
+                    self._latch_side_release_positions(
+                        side, arm_positions, arm_velocities
+                    )
+                    self._set_side_state(side, "HOLD")
+                    self.get_logger().warn(
+                        f"{reason}: latched current {arm_name}-arm pose, entering HOLD immediately"
+                    )
+
+        self._clutch_active = clutch_requested
+        if not joy_fresh:
+            self._clutch_armed = [False, False]
+
+    def _side_joint_range(self, side: int) -> range:
+        start = side * self.JOINTS_PER_ARM
+        return range(start, start + self.JOINTS_PER_ARM)
+
+    def _set_side_state(self, side: int, state: str) -> None:
+        for index in self._side_joint_range(side):
+            self._arm_states[index] = state
+
+    def _latch_side_release_positions(
+        self,
+        side: int,
+        arm_positions: List[float],
+        arm_velocities: List[float],
+    ) -> None:
+        if self._arm_hold_positions is None:
+            self._arm_hold_positions = list(arm_positions)
+        for index in self._side_joint_range(side):
+            position = arm_positions[index]
+            velocity = arm_velocities[index]
+            prediction_time = self._joint_release_prediction_time[index]
+            prediction_limit = self._joint_release_prediction_limit[index]
+            correction = (
+                _clamp(velocity * prediction_time, prediction_limit)
+                if prediction_time > 0.0 and prediction_limit > 0.0
+                else 0.0
+            )
+            target = position + correction
+            target = max(
+                self._joint_min_position[index],
+                min(self._joint_max_position[index], target),
+            )
+            self._arm_hold_positions[index] = target
+
+            if prediction_time > 0.0 and prediction_limit > 0.0:
+                self.get_logger().warn(
+                    f"{ARM_JOINT_NAMES[index]} release latch: "
+                    f"q={position:.4f}, dq={velocity:.4f}, "
+                    f"correction={target - position:+.4f}, q_hold={target:.4f}"
+                )
 
     def _build_command(self) -> MITJointCommands:
         arm_tau_g = [0.0] * self.ARM_COUNT
@@ -608,21 +631,15 @@ class DragTeachController(Node):
             motor = MITJointCommand()
             if self.ARM_START_INDEX <= index < self.ARM_START_INDEX + self.ARM_COUNT:
                 arm_index = index - self.ARM_START_INDEX
-                in_hold = (
-                    self._arm_states[arm_index] == "HOLD"
-                    and self._arm_hold_positions is not None
-                )
-                motor.kp = (
-                    self._joint_hold_kp[arm_index] if in_hold else self._joint_drag_kp[arm_index]
-                )
-                motor.kd = (
-                    self._joint_hold_kd[arm_index] if in_hold else self._joint_drag_kd[arm_index]
-                )
-                motor.pos = (
-                    float(self._arm_hold_positions[arm_index])
-                    if in_hold and self._joint_hold_position_enabled[arm_index]
-                    else float(position)
-                )
+                state = self._arm_states[arm_index]
+                if state == "HOLD":
+                    motor.kp = self._joint_hold_kp[arm_index]
+                    motor.kd = self._joint_hold_kd[arm_index]
+                    motor.pos = float(self._arm_hold_positions[arm_index])
+                else:
+                    motor.kp = self._joint_drag_kp[arm_index]
+                    motor.kd = self._joint_drag_kd[arm_index]
+                    motor.pos = float(position)
                 motor.vel = 0.0
                 motor.eff = _clamp(
                     effective_gravity_scale

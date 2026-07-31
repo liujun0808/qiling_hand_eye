@@ -29,7 +29,7 @@ class AprilTagPoseNode(Node):
         self.declare_parameter("output_topic", "/camera/tag10_pose")
         self.declare_parameter("tag_family", "tag36h11")
         self.declare_parameter("tag_id", 10)
-        self.declare_parameter("tag_size", 0.075)
+        self.declare_parameter("tag_size", 0.107)
 
         self._image_topic = self.get_parameter("image_topic").value
         self._camera_info_topic = self.get_parameter("camera_info_topic").value

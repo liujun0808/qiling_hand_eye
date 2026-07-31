@@ -38,7 +38,9 @@ colcon build --symlink-install --packages-select qi mit_msgs topic_convertor s4_
   - 26 维 body motor 状态到 14 维双臂状态映射
   - 拖动/标定样本记录节点
   - 交互式手眼样本记录节点
-  - 交互采样时保存 AprilTag 检测绘制后的 OpenCV debug image，默认保存到 `samples/images`
+  - 交互采样按启动时间创建 `samples/YYYYMMDD_HHMMSS/` 会话目录
+  - 会话目录内保存 `samples.yaml` 与带 AprilTag 绘制效果的 `images/01.png` 至 `17.png`
+  - 每条样本明确记录机器人稳定 HOLD 后的 26/14 维关节角
   - 交互采样默认采集 17 组，文件名按 `01.png`、`02.png` ... 顺序生成，到 17 组后自动保存并退出
   - 眼在手上 `eye_in_hand` 离线求解
   - 眼在手外 `eye_to_hand` 离线求解
@@ -54,7 +56,7 @@ colcon build --symlink-install --packages-select qi mit_msgs topic_convertor s4_
   - 默认参数：
     - `tag_family=tag36h11`
     - `tag_id=10`
-    - `tag_size=0.075`
+    - `tag_size=0.107`
 
 ### 尚未实现
 
@@ -255,21 +257,23 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[人工拖动到位姿 i] --> B[AprilTag 检测]
-    B --> C{终端显示 tag 可见?}
+    B --> C{机器人稳定且 tag 可见?}
     C -->|否| D[调整机械臂/相机/Tag]
     D --> B
-    C -->|是| E[人工按 Enter]
+    C -->|是| E[人工按 c 生成候选样本]
     E --> F[读取当前 /human_lower_state]
     F --> G[Pinocchio FK 得到 T_base_tool]
     B --> H[读取 T_camera_tag]
     B --> I[读取当前 RGB 图像和 CameraInfo]
-    G --> J[写入一条样本]
+    G --> J[记录稳定后的关节角和变换]
     H --> J
     I --> K[保存 01.png/02.png...]
-    J --> L{已采满17组?}
+    J --> L{人工确认候选样本?}
     K --> L
-    L -->|否| A
-    L -->|是| M[保存 samples.yaml 并结束]
+    L -->|r 丢弃| A
+    L -->|n 接受| M{已采满17组?}
+    M -->|否| A
+    M -->|是| N[保存 samples.yaml 并结束]
 ```
 
 当前样本格式核心字段：
@@ -277,10 +281,17 @@ flowchart TD
 ```yaml
 metadata:
   format: s4_handeye_samples_v1
+  session_name: YYYYMMDD_HHMMSS
 samples:
   - t: ...
     q: [...]
     q14: [...]
+    settled_joint_angles:
+      unit: rad
+      names: [...]
+      positions: [...]
+      arm_joint_names: [...]
+      arm_positions: [...]
     dq: [...]
     tau_est: [...]
     frames:
@@ -291,7 +302,7 @@ samples:
     tag_poses:
       camera_or_tag_name: ...
     image:
-      file: samples/images/01.png
+      file: samples/YYYYMMDD_HHMMSS/images/01.png
       topic: /handeye_camera/camera/color/image_raw
       frame_id: ...
       stamp: ...
@@ -300,6 +311,7 @@ samples:
 说明：
 
 - 手眼标定时建议设置 `require_tags=true`，只有 tag 新鲜可见时才允许记录。
+- 默认要求上肢速度连续 0.5 秒不高于 0.08 rad/s，确保记录的是下垂结束并进入 HOLD 后的关节角。
 - 每条有效样本同时包含机器人末端位姿、视觉测得的 `T_camera_tag` 和当前带 AprilTag 框线/坐标轴的图像文件路径。
 - 默认 `save_images=true`，采样器会在本地把 AprilTag 框线和坐标轴绘制到当前 RGB 图像上并保存。
 - 如果 RGB 图像或 CameraInfo 尚未收到新鲜数据，则本次采样会被拒绝。
@@ -307,24 +319,25 @@ samples:
 - 终端会持续显示状态，例如：
 
 ```text
-state=OK | tags=tag10:VISIBLE | image=OK | samples=3/17
-[Enter/s/w/q] >
+state=OK | robot=STABLE(...) | tags=tag10:VISIBLE | image=OK | samples=3/17
+[c/s/w/q] >
 ```
 
 交互命令：
 
-- `Enter`：记录当前样本。
+- `c`：生成当前候选样本。
 - `s`：刷新状态。
 - `w`：等待 tag 变为可见。
 - `q`：保存文件并退出。
+- 候选生成后按 `n` 接受，或按 `r` 删除图片和候选数据后重采。
 
 交互规则：
 
 - 人工拖动到一个新位姿后，先观察终端中 `tags=tag10:VISIBLE`。
 - 若 tag 不可见，调整机械臂、相机或 AprilTag 后再次查看状态。
-- tag 可见且 `state=OK`、`image=OK`、`camera_info=OK` 后按 Enter。
+- 仅在 `state=OK`、`robot=STABLE`、`tag10:VISIBLE`、`image=OK`、`camera_info=OK` 时按 `c`。
 - 程序会同时记录 `T_base_tool`、`T_camera_tag`，并保存带 AprilTag 投影绘制效果的当前相机画面。
-- 采样成功后再拖动到下一个位姿；采满 17 组自动结束。
+- 按 `n` 接受后才允许拖动到下一个位姿；采满 17 组自动结束。
 
 ### 阶段 C：眼在手上标定
 
@@ -649,7 +662,7 @@ T_camera_tag
 ```text
 tag_family = tag36h11
 tag_id     = 10
-tag_size   = 0.075 m
+tag_size   = 0.107 m
 ```
 
 输出 topic 默认：
@@ -703,7 +716,7 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 launch s4_vision_bringup single_camera_apriltag.l
   serial_no:="'<camera_serial>'" \
   tag_id:=10 \
   tag_family:=tag36h11 \
-  tag_size:=0.075
+  tag_size:=0.107
 ```
 
 输出：
@@ -726,7 +739,7 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 launch s4_vision_bringup single_camera_apriltag.l
   serial_no:="'<camera_serial>'" \
   tag_id:=10 \
   tag_family:=tag36h11 \
-  tag_size:=0.075
+  tag_size:=0.107
 ```
 
 终端 2，验证相机图像和 CameraInfo：
@@ -804,8 +817,12 @@ ros2 run topic_convertor topic_converter_node --ros-args \
 source install/setup.bash
 ros2 launch s4_command_tools drag_teach_controller.launch.py   enable_sdk_command:=true   control_enabled:=false   joint_config_path:=/home/coral/project/qiling_hand_eye/src/s4_command_tools/config/drag_teach_joints.yaml   gravity_scale:=0.3
 ```
-```
+```bash
 ros2 param set /s4_drag_teach_controller control_enabled true
+```
+统一启动：
+```bash
+ros2 launch s4_command_tools drag_teach_bringup.launch.py
 ```
 
 上肢各关节的 `kp/kd/gravity_scale/effort_limit/阈值` 默认从安装后的 YAML 读取：
@@ -855,32 +872,36 @@ ros2 run s4_handeye_calibration sample_recorder --ros-args \
 
 ### 8.8 交互式记录手眼标定样本
 
-每拖动到一个位姿后，先看终端中 tag 是否可见；确认可见后按 Enter 记录当前机器人 FK 和 `T_camera_tag`。
+每拖动到一个位姿后松开手柄，等待 `robot=STABLE`，确认 tag 可见后按 `c` 生成候选样本，再按 `n` 接受或按 `r` 丢弃。
 
 ```bash
 ros2 run s4_handeye_calibration interactive_sample_recorder --ros-args \
   -p state_topic:=/human_lower_state \
-  -p output_file:=samples/handeye_left.yaml \
+  -p session_root_dir:=samples \
   -p tag_pose_topics:="['/handeye_camera/tag10_pose']" \
   -p tag_pose_names:="['tag10']" \
   -p require_tags:=true \
   -p image_topic:=/handeye_camera/camera/color/image_raw \
   -p camera_info_topic:=/handeye_camera/camera/color/camera_info \
-  -p image_output_dir:=samples/images \
   -p image_extension:=png \
   -p draw_tag_overlay:=true \
-  -p tag_size:=0.075 \
-  -p max_samples:=17
+  -p tag_size:=0.107 \
+  -p max_samples:=17 \
+  -p require_stationary:=true \
+  -p stationary_velocity_threshold_rad_s:=0.08 \
+  -p stationary_duration_sec:=0.5
 ```
 
 终端交互：
 
 ```text
-state=OK | tags=tag10:VISIBLE | image=OK | camera_info=OK | samples=3/17
-[Enter/s/w/q] >
+state=OK | robot=STABLE(...) | tags=tag10:VISIBLE | image=OK | camera_info=OK | samples=3/17
+[c/s/w/q] >
 ```
 
-- `Enter`：记录当前样本，并保存当前相机画面为 `01.png`、`02.png` ...
+- `c`：记录候选样本，并保存当前相机画面为 `01.png`、`02.png` ...
+- `n`：接受候选样本并写入会话 YAML。
+- `r`：丢弃候选样本及对应图片。
 - `s`：刷新状态。
 - `w`：等待 tag 变为可见。
 - `q`：保存文件并退出。
@@ -889,7 +910,7 @@ state=OK | tags=tag10:VISIBLE | image=OK | camera_info=OK | samples=3/17
 
 ```bash
 ros2 run s4_handeye_calibration handeye_calibrate -- \
-  --samples samples/handeye_left.yaml \
+  --samples <session_dir>/samples.yaml \
   --mode eye_in_hand \
   --tool-frame LH_hand_base_link \
   --tag-name tag10 \
@@ -961,7 +982,7 @@ ros2 run s4_handeye_calibration publish_calibration_tf -- \
 ```text
 tag_family = tag36h11
 tag_id     = 10
-tag_size   = 0.075 m
+tag_size   = 0.107 m
 ```
 
 ### 9.2 实机状态桥验证
@@ -1104,14 +1125,15 @@ still_time_sec
 state=OK | tags=tag10:VISIBLE | image=OK | camera_info=OK
 ```
 
-6. 按 Enter 采集当前样本。
-7. 采满 17 组后自动保存。
+6. 等待 `robot=STABLE` 后按 `c` 采集候选样本。
+7. 按 `n` 接受，或按 `r` 删除并重采。
+8. 采满 17 组后自动保存。
 
 验收标准：
 
 - 样本 YAML 包含 17 条数据。
-- 每条数据包含 `q/q14`、`frames`、`tag_poses`、`image`。
-- `samples/images/01.png` 到 `17.png` 均存在。
+- 每条数据包含 `q/q14`、`settled_joint_angles`、`frames`、`tag_poses`、`image`。
+- `samples/YYYYMMDD_HHMMSS/images/01.png` 到 `17.png` 均存在。
 - 图片中有本地绘制的 AprilTag 外框和坐标轴。
 
 ### 9.6 离线外参求解

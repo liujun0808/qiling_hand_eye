@@ -14,6 +14,7 @@ setup(
             [
                 "launch/dryrun_hold_command.launch.py",
                 "launch/drag_teach_controller.launch.py",
+                "launch/drag_teach_bringup.launch.py",
             ],
         ),
         (
