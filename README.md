@@ -1,6 +1,6 @@
 # Qiling S4 Hand-Eye Calibration
 
-基于 ROS 2 Humble 的齐灵 S4 双臂拖动示教与手眼标定工程。项目支持单相机 AprilTag 检测、交互式多位姿采样、Pinocchio FK、眼在手上/眼在手外外参求解及眼在手上一致性验证。
+基于 ROS 2 Humble 的启灵 S4 双臂拖动示教与手眼标定工程。项目支持单相机 AprilTag 检测、交互式多位姿采样、Pinocchio FK、眼在手上/眼在手外外参求解及眼在手上一致性验证。
 
 > **安全提示**：`drag_teach_bringup.launch.py` 默认会启用 SDK command。首次上机应托住手臂并使用 `control_enabled:=false`；发现异常立即执行 `ros2 param set /s4_drag_teach_controller control_enabled false`。
 
@@ -163,7 +163,32 @@ ros2 run s4_handeye_calibration handeye_calibrate -- \
 
 ## 9. 核心算法
 
-### 9.1 眼在手上
+### 9.1 拖动示教
+
+控制器读取 26 维 `q/dq`，以 50 Hz 输出 MIT command。左右臂使用独立状态机：`A` 键控制左臂，`B` 键控制右臂。
+
+```text
+DRAG：按住按键
+  q_des = q_measured
+  dq_des = 0
+  使用低 kp/kd 和每关节重力前馈
+
+HOLD：松开按键
+  q_hold = clamp(q + dq * prediction_time, joint_limits)
+  q_des = q_hold
+  dq_des = 0
+  使用每关节 hold_kp/hold_kd 和重力前馈
+```
+
+电机控制律为：
+
+```text
+tau = kp * (q_des - q) + kd * (dq_des - dq) + gravity_scale * tau_g(q)
+```
+
+`tau_g(q)` 由 Pinocchio 计算并按关节限幅。12 个下肢关节在拖动期间持续保持启动时角度；手柄超时、状态超时或安全检查失败时，手臂退出主动拖动。
+
+### 9.2 眼在手上
 
 对每组样本：
 
@@ -173,7 +198,7 @@ T_base_tool_i * T_tool_camera * T_camera_tag_i = T_base_tag
 
 联合优化常量 `T_tool_camera` 和 `T_base_tag`。
 
-### 9.2 眼在手外
+### 9.3 眼在手外
 
 ```text
 T_base_tool_i * T_tool_tag = T_base_camera * T_camera_tag_i
