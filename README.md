@@ -206,13 +206,42 @@ T_base_tool_i * T_tool_tag = T_base_camera * T_camera_tag_i
 
 联合优化常量 `T_base_camera` 和 `T_tool_tag`。
 
-两种模式均使用 SE(3) 闭环残差：
+两种模式均先构造 SE(3) 闭环误差变换：
 
 ```text
-e_i = Log(inv(T_expected) * T_actual)
+E_i = inv(T_expected_i) * T_actual_i
 ```
 
-求解器使用 `scipy.optimize.least_squares` 和 `soft_l1` 鲁棒损失，输出平移/旋转 RMSE、最大误差和最终外参 YAML。
+对于眼在手上：
+
+```text
+T_expected_i = T_base_tag
+T_actual_i   = T_base_tool_i * T_tool_camera * T_camera_tag_i
+```
+
+对于眼在手外：
+
+```text
+T_expected_i = T_base_tool_i * T_tool_tag
+T_actual_i   = T_base_camera * T_camera_tag_i
+```
+
+理想情况下 `E_i` 为单位变换。实现中将其转换为 6 维残差：
+
+```text
+e_i = [rho_x, rho_y, rho_z, phi_x, phi_y, phi_z]
+
+rho_i = translation(E_i)       # 平移闭环误差，单位 m
+phi_i = Log_SO3(rotation(E_i)) # 旋转向量误差，单位 rad
+```
+
+其中 `Log_SO3` 将旋转矩阵转换为旋转轴乘旋转角。项目默认旋转权重为 1.0，将所有样本的 6 维残差拼接后求解：
+
+```text
+minimize sum soft_l1(e_i)
+```
+
+求解器使用 `scipy.optimize.least_squares`、`soft_l1` 鲁棒损失和 0.05 的 `f_scale`，同时优化外参与固定物位姿。最后按样本统计 `||rho_i||` 和 `||phi_i||` 的 RMSE/最大值，并将外参、求解状态和残差写入 YAML。
 
 ## 10. 验证
 
