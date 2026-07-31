@@ -1,0 +1,75 @@
+mode: eye_in_hand
+tool_frame: RH_hand_base_link
+tag_name: tag10
+sample_count: 15
+success: true
+message: '`ftol` termination condition is satisfied.'
+cost: 0.003962145616660253
+T_tool_camera:
+  translation:
+  - -0.01970786005521471
+  - 0.04989482301574256
+  - 0.09382734810082564
+  quaternion_xyzw:
+  - 0.19742786476025764
+  - 0.38883376560361765
+  - -0.06519739290170846
+  - 0.8975409967803903
+  matrix:
+  - 0.6891152053706624
+  - 0.2705679062045898
+  - 0.6722449269864476
+  - -0.01970786005521471
+  - 0.03649857415466119
+  - 0.9135430763500514
+  - -0.4051011006373112
+  - 0.04989482301574256
+  - -0.723732055260527
+  - 0.30369730947927176
+  - 0.6196610818854328
+  - 0.09382734810082564
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+T_base_tag:
+  translation:
+  - 0.3890297070628383
+  - -0.13611355563392086
+  - -0.1709093877454605
+  quaternion_xyzw:
+  - -0.008948005118557376
+  - 0.015907890857956006
+  - 0.04651309707475607
+  - 0.9987509219086428
+  matrix:
+  - 0.9951669416179313
+  - -0.09319468494612253
+  - 0.030943642458601518
+  - 0.3890297070628383
+  - 0.09262530939083276
+  - 0.9955129300098251
+  - 0.01935350726626633
+  - -0.13611355563392086
+  - -0.03260844018142101
+  - -0.0163938061793434
+  - 0.9993337444256992
+  - -0.1709093877454605
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+residuals:
+  translation_rmse_m: 0.0086841420849564
+  translation_max_m: 0.016805831117383672
+  rotation_rmse_rad: 0.021773371640787173
+  rotation_max_rad: 0.04576597653344104
+  sample_count: 15
+input_sample_count: 17
+excluded_sample_indices:
+- 3
+- 10
+fk_recomputed: true
+joint_sign_overrides:
+  right_shoulder_yaw_joint: -1.0
+urdf: /home/coral/project/qiling_hand_eye/install/qi_robot_description/share/qi_robot_description/urdf/s4_dual_arm.urdf

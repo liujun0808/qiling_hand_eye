@@ -23,6 +23,7 @@ setup(
             "sample_recorder = s4_handeye_calibration.sample_recorder_node:main",
             "interactive_sample_recorder = s4_handeye_calibration.interactive_sample_recorder:main",
             "handeye_calibrate = s4_handeye_calibration.handeye_calibrate:main",
+            "handeye_validate = s4_handeye_calibration.handeye_validate:main",
             "publish_calibration_tf = s4_handeye_calibration.publish_calibration_tf:main",
             "fk_probe = s4_handeye_calibration.fk_probe:main",
         ],

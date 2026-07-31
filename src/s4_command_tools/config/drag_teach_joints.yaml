@@ -82,6 +82,8 @@ joints:
     hold_kp: 8.0
     hold_kd: 0.8
     gravity_scale: 1.0
+    drag_gravity_scale: 0.8
+    hold_gravity_scale: 1.0
     effort_limit: 7.0
     safety_hold_error_limit_rad: 0.32
     release_prediction_time_sec: 0.06

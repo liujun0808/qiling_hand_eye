@@ -63,9 +63,6 @@ class InteractiveSampleRecorder(Node):
         self.declare_parameter("draw_tag_overlay", True)
         self.declare_parameter("tag_size", 0.107)
         self.declare_parameter("max_samples", 17)
-        self.declare_parameter("require_stationary", True)
-        self.declare_parameter("stationary_velocity_threshold_rad_s", 0.08)
-        self.declare_parameter("stationary_duration_sec", 0.5)
 
         self.state_topic = self.get_parameter("state_topic").value
         self.session_name, self.session_dir = _create_session_directory(
@@ -94,22 +91,11 @@ class InteractiveSampleRecorder(Node):
         self.draw_tag_overlay = bool(self.get_parameter("draw_tag_overlay").value)
         self.tag_size = float(self.get_parameter("tag_size").value)
         self.max_samples = int(self.get_parameter("max_samples").value)
-        self.require_stationary = bool(self.get_parameter("require_stationary").value)
-        self.stationary_velocity_threshold = float(
-            self.get_parameter("stationary_velocity_threshold_rad_s").value
-        )
-        self.stationary_duration_sec = float(
-            self.get_parameter("stationary_duration_sec").value
-        )
 
         if self.tag_pose_topics and not self.tag_pose_names:
             self.tag_pose_names = [f"tag_{i}" for i in range(len(self.tag_pose_topics))]
         if len(self.tag_pose_topics) != len(self.tag_pose_names):
             raise ValueError("tag_pose_names must match tag_pose_topics")
-        if self.stationary_velocity_threshold < 0.0:
-            raise ValueError("stationary_velocity_threshold_rad_s must be non-negative")
-        if self.stationary_duration_sec < 0.0:
-            raise ValueError("stationary_duration_sec must be non-negative")
 
         self.kinematics = S4Kinematics(self.get_parameter("urdf_path").value)
         self.bridge = CvBridge()
@@ -122,8 +108,6 @@ class InteractiveSampleRecorder(Node):
         self.dist_coeffs: Optional[np.ndarray] = None
         self.latest_tags: Dict[str, Dict[str, object]] = {}
         self.samples: List[Dict[str, object]] = []
-        self.latest_arm_max_velocity = float("inf")
-        self.stationary_since_time_sec: Optional[float] = None
         self.lock = threading.Lock()
 
         self.state_sub = self.create_subscription(
@@ -157,22 +141,8 @@ class InteractiveSampleRecorder(Node):
             )
 
     def _state_callback(self, msg: MITLowState) -> None:
-        now = self.get_clock().now().nanoseconds * 1e-9
-        velocities = [float(value) for value in msg.joint_states.velocity]
-        arm_velocities = velocities[12:26] if len(velocities) == 26 else velocities
-        max_velocity = (
-            max(abs(value) for value in arm_velocities)
-            if len(arm_velocities) == 14
-            else float("inf")
-        )
         with self.lock:
             self.latest_state = msg
-            self.latest_arm_max_velocity = max_velocity
-            if max_velocity <= self.stationary_velocity_threshold:
-                if self.stationary_since_time_sec is None:
-                    self.stationary_since_time_sec = now
-            else:
-                self.stationary_since_time_sec = None
 
     def _image_callback(self, msg: Image) -> None:
         image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -209,7 +179,6 @@ class InteractiveSampleRecorder(Node):
     def status_text(self) -> str:
         with self.lock:
             state_ok = self.latest_state is not None and len(self.latest_state.joint_states.position) in (14, 26)
-            stationary_ok = self._stationary_ready_locked()
             image_ok = (not self.save_images) or self._fresh_image_locked()
             camera_info_ok = (not self.save_images) or (not self.draw_tag_overlay) or self.camera_matrix is not None
             fresh_tags = self._fresh_tags_locked()
@@ -223,8 +192,7 @@ class InteractiveSampleRecorder(Node):
                 tag_parts.append("no tag topics configured")
             return (
                 f"state={'OK' if state_ok else 'WAIT'} | "
-                f"robot={'STABLE' if stationary_ok else 'MOVING'}"
-                f"({self.latest_arm_max_velocity:.3f}rad/s) | "
+                "settling=MANUAL_C_CONFIRM | "
                 f"tags={', '.join(tag_parts)} | "
                 f"image={'OK' if image_ok else 'WAIT'} | "
                 f"camera_info={'OK' if camera_info_ok else 'WAIT'} | "
@@ -246,14 +214,6 @@ class InteractiveSampleRecorder(Node):
             return False
         now = self.get_clock().now().nanoseconds * 1e-9
         return now - self.latest_image_received_time_sec <= self.max_image_age_sec
-
-    def _stationary_ready_locked(self) -> bool:
-        if not self.require_stationary:
-            return True
-        if self.stationary_since_time_sec is None:
-            return False
-        now = self.get_clock().now().nanoseconds * 1e-9
-        return now - self.stationary_since_time_sec >= self.stationary_duration_sec
 
     def _draw_tag_overlay_locked(self, image, tags: Dict[str, Dict[str, object]]) -> None:
         if self.camera_matrix is None:
@@ -305,13 +265,6 @@ class InteractiveSampleRecorder(Node):
                 return False, f"max_samples={self.max_samples} already reached"
             if self.latest_state is None:
                 return False, "no /human_lower_state has been received"
-            if not self._stationary_ready_locked():
-                return False, (
-                    "robot is not stationary: "
-                    f"max arm velocity={self.latest_arm_max_velocity:.3f} rad/s; "
-                    f"require <= {self.stationary_velocity_threshold:.3f} rad/s "
-                    f"for {self.stationary_duration_sec:.2f} s"
-                )
             if self.save_images and not self._fresh_image_locked():
                 return False, f"no fresh image has been received on {self.image_topic}"
             if self.save_images and self.draw_tag_overlay and self.camera_matrix is None:
@@ -369,8 +322,7 @@ class InteractiveSampleRecorder(Node):
                     "positions": [float(v) for v in positions],
                     "arm_joint_names": list(ARM_JOINT_NAMES),
                     "arm_positions": self.kinematics.q14_from_state_positions(positions),
-                    "max_abs_arm_velocity_rad_s": self.latest_arm_max_velocity,
-                    "required_stationary_duration_sec": self.stationary_duration_sec,
+                    "confirmation": "manual_c_key",
                 },
                 "dq": [float(v) for v in velocities],
                 "tau_est": [float(v) for v in efforts],
@@ -441,9 +393,7 @@ class InteractiveSampleRecorder(Node):
                 "draw_tag_overlay": self.draw_tag_overlay,
                 "tag_size": self.tag_size,
                 "max_samples": self.max_samples,
-                "require_stationary": self.require_stationary,
-                "stationary_velocity_threshold_rad_s": self.stationary_velocity_threshold,
-                "stationary_duration_sec": self.stationary_duration_sec,
+                "settling_confirmation": "manual_c_key",
             },
             "samples": self.samples,
         }
@@ -464,7 +414,8 @@ def main(args=None) -> None:
 
     print("")
     print("S4 interactive hand-eye sampler")
-    print("Move the arm, release the clutch, wait for STABLE, then verify the tag.")
+    print("Move the arm, release the clutch, and wait until it is physically settled.")
+    print("Pressing c is the manual confirmation that settling is complete.")
     print("Commands: c=capture candidate, s=status, w=wait for tag, q=save and quit")
     print("Each candidate requires n=accept or r=discard before the next pose.")
     print(f"Target samples: {node.max_samples if node.max_samples > 0 else 'unlimited'}")
@@ -490,7 +441,7 @@ def main(args=None) -> None:
                 print("tag visible" if ok else "tag wait timeout")
                 continue
             if command != "c":
-                print("Use c to capture after state=OK, robot=STABLE, and tag10:VISIBLE.")
+                print("Use c to capture after state=OK and tag10:VISIBLE.")
                 continue
             ok, message = node.capture()
             print(("OK: " if ok else "SKIP: ") + message)

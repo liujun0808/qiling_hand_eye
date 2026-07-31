@@ -311,7 +311,7 @@ samples:
 说明：
 
 - 手眼标定时建议设置 `require_tags=true`，只有 tag 新鲜可见时才允许记录。
-- 默认要求上肢速度连续 0.5 秒不高于 0.08 rad/s，确保记录的是下垂结束并进入 HOLD 后的关节角。
+- 人工观察机械臂下垂结束并进入 HOLD 后按 `c`；`c` 即为稳定完成的人工确认，不再使用关节速度门槛拒绝采样。
 - 每条有效样本同时包含机器人末端位姿、视觉测得的 `T_camera_tag` 和当前带 AprilTag 框线/坐标轴的图像文件路径。
 - 默认 `save_images=true`，采样器会在本地把 AprilTag 框线和坐标轴绘制到当前 RGB 图像上并保存。
 - 如果 RGB 图像或 CameraInfo 尚未收到新鲜数据，则本次采样会被拒绝。
@@ -319,7 +319,7 @@ samples:
 - 终端会持续显示状态，例如：
 
 ```text
-state=OK | robot=STABLE(...) | tags=tag10:VISIBLE | image=OK | samples=3/17
+state=OK | settling=MANUAL_C_CONFIRM | tags=tag10:VISIBLE | image=OK | samples=3/17
 [c/s/w/q] >
 ```
 
@@ -335,7 +335,7 @@ state=OK | robot=STABLE(...) | tags=tag10:VISIBLE | image=OK | samples=3/17
 
 - 人工拖动到一个新位姿后，先观察终端中 `tags=tag10:VISIBLE`。
 - 若 tag 不可见，调整机械臂、相机或 AprilTag 后再次查看状态。
-- 仅在 `state=OK`、`robot=STABLE`、`tag10:VISIBLE`、`image=OK`、`camera_info=OK` 时按 `c`。
+- 人工确认机械臂已经停止下垂并进入 HOLD，且终端显示 `state=OK`、`tag10:VISIBLE`、`image=OK`、`camera_info=OK` 后按 `c`。
 - 程序会同时记录 `T_base_tool`、`T_camera_tag`，并保存带 AprilTag 投影绘制效果的当前相机画面。
 - 按 `n` 接受后才允许拖动到下一个位姿；采满 17 组自动结束。
 
@@ -872,7 +872,7 @@ ros2 run s4_handeye_calibration sample_recorder --ros-args \
 
 ### 8.8 交互式记录手眼标定样本
 
-每拖动到一个位姿后松开手柄，等待 `robot=STABLE`，确认 tag 可见后按 `c` 生成候选样本，再按 `n` 接受或按 `r` 丢弃。
+每拖动到一个位姿后松开手柄，人工确认机械臂已经停止下垂并进入 HOLD，确认 tag 可见后按 `c` 生成候选样本，再按 `n` 接受或按 `r` 丢弃。
 
 ```bash
 ros2 run s4_handeye_calibration interactive_sample_recorder --ros-args \
@@ -886,16 +886,13 @@ ros2 run s4_handeye_calibration interactive_sample_recorder --ros-args \
   -p image_extension:=png \
   -p draw_tag_overlay:=true \
   -p tag_size:=0.107 \
-  -p max_samples:=17 \
-  -p require_stationary:=true \
-  -p stationary_velocity_threshold_rad_s:=0.08 \
-  -p stationary_duration_sec:=0.5
+  -p max_samples:=17
 ```
 
 终端交互：
 
 ```text
-state=OK | robot=STABLE(...) | tags=tag10:VISIBLE | image=OK | camera_info=OK | samples=3/17
+state=OK | settling=MANUAL_C_CONFIRM | tags=tag10:VISIBLE | image=OK | camera_info=OK | samples=3/17
 [c/s/w/q] >
 ```
 
@@ -1125,7 +1122,7 @@ still_time_sec
 state=OK | tags=tag10:VISIBLE | image=OK | camera_info=OK
 ```
 
-6. 等待 `robot=STABLE` 后按 `c` 采集候选样本。
+6. 人工确认机械臂停止下垂并进入 HOLD 后按 `c` 采集候选样本。
 7. 按 `n` 接受，或按 `r` 删除并重采。
 8. 采满 17 组后自动保存。
 

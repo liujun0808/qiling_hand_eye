@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import numpy as np
 import pinocchio as pin
@@ -86,9 +86,14 @@ class S4Kinematics:
             mapping[name] = self.model.joints[joint_id].idx_v
         return mapping
 
-    def q_from_state_positions(self, positions: Iterable[float]) -> np.ndarray:
+    def q_from_state_positions(
+        self,
+        positions: Iterable[float],
+        joint_signs: Optional[Dict[str, float]] = None,
+    ) -> np.ndarray:
         values = list(positions)
         q = pin.neutral(self.model)
+        signs = joint_signs or {}
 
         if len(values) == 26:
             source_names = self.body_26_motor_order
@@ -100,7 +105,7 @@ class S4Kinematics:
         for index, name in enumerate(source_names):
             q_index = self._joint_q_index.get(name)
             if q_index is not None:
-                q[q_index] = values[index]
+                q[q_index] = values[index] * float(signs.get(name, 1.0))
         return q
 
     def q14_from_state_positions(self, positions: Iterable[float]) -> List[float]:
@@ -128,8 +133,13 @@ class S4Kinematics:
         transform[:3, 3] = placement.translation
         return transform
 
-    def frame_transforms(self, positions: Iterable[float], frame_names: List[str]) -> Dict[str, np.ndarray]:
-        q = self.q_from_state_positions(positions)
+    def frame_transforms(
+        self,
+        positions: Iterable[float],
+        frame_names: List[str],
+        joint_signs: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, np.ndarray]:
+        q = self.q_from_state_positions(positions, joint_signs=joint_signs)
         pin.forwardKinematics(self.model, self.data, q)
         pin.updateFramePlacements(self.model, self.data)
         transforms: Dict[str, np.ndarray] = {}

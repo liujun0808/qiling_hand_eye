@@ -223,7 +223,8 @@ class DragTeachController(Node):
         self._joint_drag_kd: List[float] = []
         self._joint_hold_kp: List[float] = []
         self._joint_hold_kd: List[float] = []
-        self._joint_gravity_scale: List[float] = []
+        self._joint_drag_gravity_scale: List[float] = []
+        self._joint_hold_gravity_scale: List[float] = []
         self._joint_effort_limit: List[float] = []
         self._joint_safety_hold_error_limit: List[float] = []
         self._joint_gravity_sign: List[float] = []
@@ -245,8 +246,14 @@ class DragTeachController(Node):
             self._joint_drag_kd.append(_value(config, "drag_kd", joint_defaults["drag_kd"]))
             self._joint_hold_kp.append(_value(config, "hold_kp", joint_defaults["hold_kp"]))
             self._joint_hold_kd.append(_value(config, "hold_kd", joint_defaults["hold_kd"]))
-            self._joint_gravity_scale.append(
-                _value(config, "gravity_scale", joint_defaults["gravity_scale"])
+            gravity_scale = _value(
+                config, "gravity_scale", joint_defaults["gravity_scale"]
+            )
+            self._joint_drag_gravity_scale.append(
+                _value(config, "drag_gravity_scale", gravity_scale)
+            )
+            self._joint_hold_gravity_scale.append(
+                _value(config, "hold_gravity_scale", gravity_scale)
             )
             self._joint_gravity_sign.append(
                 _value(config, "gravity_sign", joint_defaults["gravity_sign"])
@@ -309,8 +316,14 @@ class DragTeachController(Node):
             return
 
         if self._max_abs_position_rad > 0.0:
-            if max(abs(value) for value in positions) > self._max_abs_position_rad:
-                self.get_logger().warn("Ignoring state beyond max_abs_position_rad", throttle_duration_sec=2.0)
+            max_index = max(range(len(positions)), key=lambda index: abs(positions[index]))
+            max_position = positions[max_index]
+            if abs(max_position) > self._max_abs_position_rad:
+                self.get_logger().warn(
+                    f"Ignoring state: motor[{max_index}] position={max_position:.3f} rad "
+                    f"exceeds max_abs_position_rad={self._max_abs_position_rad:.3f}",
+                    throttle_duration_sec=2.0,
+                )
                 self._state_ready = False
                 return
         if self._max_abs_velocity_rad_s > 0.0:
@@ -640,10 +653,15 @@ class DragTeachController(Node):
                     motor.kp = self._joint_drag_kp[arm_index]
                     motor.kd = self._joint_drag_kd[arm_index]
                     motor.pos = float(position)
+                joint_gravity_scale = (
+                    self._joint_hold_gravity_scale[arm_index]
+                    if state == "HOLD"
+                    else self._joint_drag_gravity_scale[arm_index]
+                )
                 motor.vel = 0.0
                 motor.eff = _clamp(
                     effective_gravity_scale
-                    * self._joint_gravity_scale[arm_index]
+                    * joint_gravity_scale
                     * self._joint_gravity_sign[arm_index]
                     * arm_tau_g[arm_index],
                     self._joint_effort_limit[arm_index],
