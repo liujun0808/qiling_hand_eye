@@ -1,6 +1,6 @@
 /build
 /install
 /log
-/samples/**/images
+/samples
 /validation_samples
 /src/qi_robot_description/urdf/meshes

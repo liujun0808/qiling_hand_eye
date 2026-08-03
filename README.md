@@ -270,14 +270,36 @@ ros2 run s4_handeye_calibration handeye_validate -- \
 
 ### 10.2 眼在手外验证
 
-保持相机和 Tag 安装关系不变，采集一批未参与求解的新位姿，对每组计算：
+左手标定板保持刚性固定，头部相机保持不动，另外采集一批未参与求解的左臂新位姿。验证器使用原标定的 `T_tool_tag` 对每组反算：
 
 ```text
 T_base_camera_i
 = T_base_tool_i * T_tool_tag * inv(T_camera_tag_i)
 ```
 
-统计所有 `T_base_camera_i` 的平移和旋转离散度；也可对独立数据重新求解，比较两次 `T_base_camera` 的差异。
+将每组 `T_base_camera_i` 与原标定 `T_base_camera` 比较，统计平移和旋转的 RMSE/最大误差。
+
+```bash
+# 采集 10 组独立验证数据：使用 A 键拖动左臂
+VALIDATION_ROOT=/home/coral/project/qiling_hand_eye/validation_samples/left_eye_to_hand
+
+ros2 run s4_handeye_calibration interactive_sample_recorder --ros-args \
+  -p session_root_dir:="${VALIDATION_ROOT}" \
+  -p tracked_frames:="['LH_hand_base_link']" \
+  -p max_samples:=10 -p tag_size:=0.107
+
+# 设置为采样器终端打印的 Session directory
+CALIBRATION=/home/coral/project/qiling_hand_eye/samples/left_eye_to_hand/20260803_135418/left_eye_to_hand.yaml
+VALIDATION_SESSION=/absolute/path/to/left_eye_to_hand_validation/session
+
+ros2 run s4_handeye_calibration handeye_validate -- \
+  --samples "${VALIDATION_SESSION}/samples.yaml" \
+  --calibration "${CALIBRATION}" \
+  --tool-frame LH_hand_base_link --tag-name tag10 \
+  --recompute-fk \
+  --joint-sign-overrides left_wrist_roll_joint=-1,left_wrist_yaw_joint=-1 \
+  --output "${VALIDATION_SESSION}/eye_to_hand_validation_report.yaml"
+```
 
 ### 10.3 TF 检查
 
