@@ -148,22 +148,22 @@ ros2 run s4_handeye_calibration handeye_calibrate -- \
 > 固定相机且将 Tag 也固定在桌面上时，机器人运动不能为当前眼在手外求解器提供有效手眼约束。
 
 ```bash
-# 示例：头部相机 + Tag 固定在右手，使用 B 键采集
+# 示例：头部相机 + Tag 固定在左手，使用 A 键采集
 ros2 run s4_handeye_calibration interactive_sample_recorder --ros-args \
-  -p session_root_dir:=/home/coral/project/qiling_hand_eye/samples/right_eye_to_hand \
-  -p tracked_frames:="['RH_hand_base_link']" \
+  -p session_root_dir:=/home/coral/project/qiling_hand_eye/samples/left_eye_to_hand \
+  -p tracked_frames:="['LH_hand_base_link']" \
   -p max_samples:=17 -p tag_size:=0.107
 
-SESSION=/absolute/path/to/right_eye_to_hand/session
+SESSION=/absolute/path/to/left_eye_to_hand/session
 ros2 run s4_handeye_calibration handeye_calibrate -- \
-  --samples ${SESSION}/samples.yaml \
-  --mode eye_to_hand --tool-frame RH_hand_base_link --tag-name tag10 \
+  --samples "${SESSION}/samples.yaml" \
+  --mode eye_to_hand --tool-frame LH_hand_base_link --tag-name tag10 \
   --recompute-fk \
-  --joint-sign-overrides right_shoulder_yaw_joint=-1 \
-  --output ${SESSION}/right_eye_to_hand.yaml
+  --joint-sign-overrides left_wrist_roll_joint=-1,left_wrist_yaw_joint=-1 \
+  --output "${SESSION}/left_eye_to_hand.yaml"
 ```
 
-左手眼在手外标定时将 tool frame 换为 `LH_hand_base_link`，并按左臂实际 FK 映射决定是否需要 `--joint-sign-overrides`。
+上述左手命令使用已验证的 FK 映射：`left_wrist_roll_joint=-1,left_wrist_yaw_joint=-1`。
 
 ## 9. 核心算法
 

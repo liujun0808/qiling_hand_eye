@@ -8,13 +8,13 @@
       <mass value="18.681" />
       <inertia ixx="0.88961" ixy="-3.5E-05" ixz="0.12954" iyy="0.82424" iyz="0.000272" izz="0.24073" />
     </inertial>
-    <visual>
+    <!-- <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
         <mesh filename="meshes/base_link.STL" />
       </geometry>
       <material name=""><color rgba="1 1 1 1" /></material>
-    </visual>
+    </visual> -->
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -1441,22 +1441,35 @@
     <mimic joint="RH_pinky_mcp_pitch" multiplier="0.89" offset="0" />
   </joint>
 
-  <!--
-    Eye-in-hand calibration result from:
-      samples/20260731_150143/eye_in_hand_result_filtered.yaml
+  <!-- Calibrated camera optical frames use +X image right, +Y image down, +Z lens forward. -->
 
-    This frame follows the RealSense optical convention:
-      +X image right, +Y image down, +Z forward through the lens.
-    URDF frames must remain right-handed.
-  -->
+  <!-- Right-hand Intel RealSense D405. -->
   <link name="calibrated_camera_color_optical_frame">
     <visual>
-      <origin xyz="0 0 -0.0125" rpy="0 0 0" />
+      <origin xyz="0 0 -0.0115" rpy="0 0 0" />
       <geometry>
-        <box size="0.090 0.025 0.025" />
+        <box size="0.042 0.042 0.023" />
       </geometry>
-      <material name="handeye_camera_body">
+      <material name="right_d405_camera_body">
         <color rgba="0.12 0.12 0.12 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.0105 0 0.0015" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.0045" length="0.003" />
+      </geometry>
+      <material name="right_d405_camera_lens">
+        <color rgba="0.04 0.08 0.14 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="0.0105 0 0.0015" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.0045" length="0.003" />
+      </geometry>
+      <material name="right_d405_camera_lens_aux">
+        <color rgba="0.04 0.08 0.14 1" />
       </material>
     </visual>
   </link>
@@ -1467,6 +1480,99 @@
       rpy="0.4556981292 0.8091952298 0.0529149582" />
     <parent link="RH_hand_base_link" />
     <child link="calibrated_camera_color_optical_frame" />
+  </joint>
+
+  <!--
+    Left-hand Intel RealSense D405, calibrated from:
+      samples/20260803_094251/left_eye_in_hand_filtered.yaml
+  -->
+  <link name="left_calibrated_camera_color_optical_frame">
+    <visual>
+      <origin xyz="0 0 -0.0115" rpy="0 0 0" />
+      <geometry>
+        <box size="0.042 0.042 0.023" />
+      </geometry>
+      <material name="left_d405_camera_body">
+        <color rgba="0.12 0.12 0.12 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.0105 0 0.0015" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.0045" length="0.003" />
+      </geometry>
+      <material name="left_d405_camera_lens">
+        <color rgba="0.04 0.08 0.14 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="0.0105 0 0.0015" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.0045" length="0.003" />
+      </geometry>
+      <material name="left_d405_camera_lens_aux">
+        <color rgba="0.04 0.08 0.14 1" />
+      </material>
+    </visual>
+  </link>
+
+  <joint name="LH_hand_to_calibrated_camera" type="fixed">
+    <origin
+      xyz="-0.0209877889 -0.0745941356 0.0914989107"
+      rpy="-0.3853061096 0.8654732231 -0.0927412477" />
+    <parent link="LH_hand_base_link" />
+    <child link="left_calibrated_camera_color_optical_frame" />
+  </joint>
+
+  <!--
+    Head-mounted Intel RealSense D435, calibrated from:
+      samples/left_eye_to_hand/20260803_135418/left_eye_to_hand.yaml
+  -->
+  <link name="head_calibrated_camera_color_optical_frame">
+    <visual>
+      <origin xyz="0 0 -0.0125" rpy="0 0 0" />
+      <geometry>
+        <box size="0.090 0.025 0.025" />
+      </geometry>
+      <material name="head_d435_camera_body">
+        <color rgba="0.10 0.10 0.10 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.026 0 0.0015" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.0045" length="0.003" />
+      </geometry>
+      <material name="head_d435_left_lens">
+        <color rgba="0.04 0.08 0.14 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0.0015" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.005" length="0.003" />
+      </geometry>
+      <material name="head_d435_color_lens">
+        <color rgba="0.08 0.16 0.24 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="0.026 0 0.0015" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.0045" length="0.003" />
+      </geometry>
+      <material name="head_d435_right_lens">
+        <color rgba="0.04 0.08 0.14 1" />
+      </material>
+    </visual>
+  </link>
+
+  <joint name="base_to_head_calibrated_camera" type="fixed">
+    <origin
+      xyz="0.0240925853 0.0044939526 0.6924775167"
+      rpy="-2.3896833190 0.0485398982 -1.5644776018" />
+    <parent link="base_link" />
+    <child link="head_calibrated_camera_color_optical_frame" />
   </joint>
 
 </robot>

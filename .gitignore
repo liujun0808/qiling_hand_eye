@@ -2,5 +2,5 @@
 /install
 /log
 /samples/**/images
-/validation_samples/**/images
+/validation_samples
 /src/qi_robot_description/urdf/meshes
