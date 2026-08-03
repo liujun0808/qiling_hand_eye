@@ -127,19 +127,23 @@ ros2 run s4_handeye_calibration interactive_sample_recorder --ros-args \
   -p tracked_frames:="['LH_hand_base_link']" \
   -p max_samples:=17 -p tag_size:=0.107
 
-SESSION=/absolute/path/to/left_eye_in_hand/session
+SESSION=/home/coral/project/qiling_hand_eye/samples/20260803_094251
 ros2 run s4_handeye_calibration handeye_calibrate -- \
   --samples ${SESSION}/samples.yaml \
   --mode eye_in_hand --tool-frame LH_hand_base_link --tag-name tag10 \
   --recompute-fk \
-  --output ${SESSION}/left_eye_in_hand.yaml
+  --joint-sign-overrides left_wrist_roll_joint=-1,left_wrist_yaw_joint=-1 \
+  --exclude-samples 1,7 \
+  --output ${SESSION}/left_eye_in_hand_filtered.yaml
 ```
 
-左臂尚未用视觉相对运动完成全部电机方向校验；如发现 FK/视觉相对运动不一致，应先确定对应关节符号，再通过 `--joint-sign-overrides joint_name=-1` 显式修正，不应直接复制右臂映射。
+左臂实验已确认 `left_wrist_roll_joint` 和 `left_wrist_yaw_joint` 的 SDK 角度需乘以 `-1` 后再进入 URDF FK。`--exclude-samples 1,7` 仅对会话 `20260803_094251` 有效，新数据不应直接复用该编号。
 
 ## 8. 眼在手外
 
 安装方式：相机固定在头部或外部支架，AprilTag 刚性固定在被采样的左手或右手上。相机和 Tag 的安装关系在采样期间必须保持不变。
+
+`--mode` 由物理安装方式决定，不会根据 `LH_hand_base_link` 或 `RH_hand_base_link` 自动判断。相机随手运动必须使用 `eye_in_hand`；只有相机固定且 Tag 刚性安装在手部时才使用 `eye_to_hand`。
 
 > 固定相机且将 Tag 也固定在桌面上时，机器人运动不能为当前眼在手外求解器提供有效手眼约束。
 
@@ -287,11 +291,13 @@ ros2 run s4_handeye_calibration publish_calibration_tf -- \
 
 TF 发布只检查坐标树和数值是否正确加载，不能代替独立位姿精度验证。
 
-## 11. 当前右臂结果
+## 11. 当前左右臂结果
 
-- 最终外参：`samples/20260731_150143/eye_in_hand_result_filtered.yaml`
-- 标定内部残差：8.684 mm / 1.247°
-- 新位置独立一致性：20.798 mm / 1.677°
+- 右臂外参：`samples/20260731_150143/eye_in_hand_result_filtered.yaml`
+- 右臂标定内部残差：8.684 mm / 1.247°
+- 右臂新位置独立一致性：20.798 mm / 1.677°
+- 左臂外参：`samples/20260803_094251/left_eye_in_hand_filtered.yaml`
+- 左臂标定内部残差：13.397 mm / 1.995°（15 组有效样本）
 - 完整实验报告：`right_arm_eye_in_hand_calibration_report.txt`
 - 带外参的完整模型：`src/qi_robot_description/urdf/s4_40DOF_fullbody_with_handeye_camera.urdf`
 
